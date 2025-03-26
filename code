@@ -34,8 +34,6 @@ def clean_value(value):
 def load_and_preprocess_data(file_path):
     """Load and preprocess dataset."""
     df = pd.read_excel(file_path) if file_path.endswith(".xlsx") else pd.read_json(file_path)
-    print("Test Dataset Contents:")
-    print(df.head(20))  # Display the first 20 rows of the test dataset
     df.dropna(inplace=True)
     
     sensor_columns = ['temp', 'current', 'ax', 'ay', 'az']
@@ -110,18 +108,30 @@ def predict_motor_status(test_file):
     overall_prediction = np.argmax(np.bincount(predicted_labels[-10:]))
     
     status_mapping = {0: "Normal", 1: "Moderate Chance of Failure", 2: "Alert (Failure Might Occur)"}
-    print("Last 10 Sensor Readings:")
-    print(last_10_readings.to_string(index=False))
     
-    print(f"Predicted Motor Status: {status_mapping[overall_prediction]}")
+    print("\n\tFinal Machine Analysis Report")
+    print("Last 10 Readings (Temp, Current, Vibration):")
+    for i, row in enumerate(last_10_readings.iterrows(), start=1):
+        print(f"  {i}. Temp: {row[1]['temp']:.2f}, Current: {row[1]['current']:.2f}, Vibration: {np.sqrt(row[1]['ax']**2 + row[1]['ay']**2 + row[1]['az']**2):.2f}")
     
-    max_feature_idx = np.argmax(np.mean(sequences[-10:], axis=0)[-1])
-    print("Sensor Contributions:")
-    for idx, name in enumerate(sensor_names):
-        print(f"{name}: {np.mean(sequences[-10:], axis=0)[-1][idx]:.3f}")
+    max_temp = last_10_readings['temp'].max()
+    max_current = last_10_readings['current'].max()
+    max_vibration = np.sqrt(last_10_readings['ax']**2 + last_10_readings['ay']**2 + last_10_readings['az']**2).max()
     
+    print("\nSensor Status:")
+    print(f"   Temperature: {'⚠️ Needs Consideration: Temperature near threshold' if max_temp >= 29.10 else '✅ Normal Temperature'} ({max_temp:.2f})")
+    print(f"   Current: {'❗ ALERT: High Current' if max_current >= 10 else '✅ Normal Current'} ({max_current:.2f})")
+    print(f"   Vibration: {'⚠️ High Vibration' if max_vibration >= 0.2 else '✅ Normal Vibration'} ({max_vibration:.2f})")
+    
+    print("\nThreshold Values:")
+    print("   Temperature: 29.10")
+    print("   Current: 10.00")
+    print("   Vibration: 0.20")
+    
+    print(f"\nPredicted Machine Status: {status_mapping[overall_prediction]}")
     if overall_prediction == 2:
-        print(f"Fault Cause: {sensor_names[max_feature_idx]} ({np.mean(sequences[-10:], axis=0)[-1][max_feature_idx]:.3f})")
+        max_feature_idx = np.argmax(np.mean(sequences[-10:], axis=0).mean(axis=0))
+        print(f"Fault Cause: {sensor_names[max_feature_idx]} ({np.mean(sequences[-10:], axis=0).mean(axis=0)[max_feature_idx]:.3f})")
 
 # Main program
 file_path = '/content/DATASET.xlsx'
