@@ -1,0 +1,160 @@
+#include <ESP8266WiFi.h>
+#include <WiFiClientSecure.h>
+#include <PubSubClient.h>
+#include <ArduinoJson.h>
+#include "env.h"
+#include <DHT.h>
+
+// WiFi credentials
+const char WIFI_SSID[] = "Realmec12";
+const char WIFI_PASSWORD[] = "9447472385";
+
+// Device name from AWS
+const char THINGNAME[] = "ESP8266";
+
+// MQTT broker host address from AWS
+const char MQTT_HOST[] = "ac81um6q1rlk5-ats.iot.eu-north-1.amazonaws.com";
+
+// MQTT topics
+const char AWS_IOT_PUBLISH_TOPIC[] = "esp8266/pub";
+const char AWS_IOT_SUBSCRIBE_TOPIC[] = "esp8266/sub";
+
+// Publishing interval
+const long interval = 1000;
+
+// Timezone offset from UTC
+const int8_t TIME_ZONE = -5;
+
+// Last time message was sent
+unsigned long lastMillis = 0;
+
+// WiFiClientSecure object for secure communication
+WiFiClientSecure net;
+
+// X.509 certificate for the CA
+BearSSL::X509List cert(cacert);
+
+// X.509 certificate for the client
+BearSSL::X509List client_crt(client_cert);
+
+// RSA private key
+BearSSL::PrivateKey key(privkey);
+
+// MQTT client instance
+PubSubClient client(net);
+
+// DHT sensor setup
+#define DHTPIN D4        // Pin connected to DHT sensor
+#define DHTTYPE DHT11   // Define the sensor type (DHT11 or DHT22)
+DHT dht(DHTPIN, DHTTYPE);  // Create an instance of the DHT sensor
+
+// Vibration sensor setup
+#define VIBRATION_SENSOR_PIN D0  // Pin connected to SW-420 sensor
+
+// Function to connect to NTP server and set time
+void NTPConnect() {
+  Serial.print("Setting time using SNTP");
+  configTime(TIME_ZONE * 3600, 0, "pool.ntp.org", "time.nist.gov");
+  time_t now = time(nullptr);
+  while (now < 1510592825) { // January 13, 2018
+    delay(500);
+    Serial.print(".");
+    now = time(nullptr);
+  }
+  Serial.println("done!");
+}
+
+// Callback function for message reception
+void messageReceived(char *topic, byte *payload, unsigned int length) {
+  Serial.print("Received [");
+  Serial.print(topic);
+  Serial.print("]: ");
+  for (int i = 0; i < length; i++) {
+    Serial.print((char)payload[i]);
+  }
+  Serial.println();
+}
+
+// Function to connect to AWS IoT Core
+void connectAWS() {
+  delay(3000);
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+
+  Serial.println(String("Attempting to connect to SSID: ") + String(WIFI_SSID));
+
+  while (WiFi.status() != WL_CONNECTED) {
+    Serial.print(".");
+    delay(1000);
+  }
+
+  NTPConnect();
+
+  net.setTrustAnchors(&cert);
+  net.setClientRSACert(&client_crt, &key);
+
+  client.setServer(MQTT_HOST, 8883);
+  client.setCallback(messageReceived);
+
+  Serial.println("Connecting to AWS IoT");
+
+  while (!client.connect(THINGNAME)) {
+    Serial.print(".");
+    delay(1000);
+  }
+
+  if (!client.connected()) {
+    Serial.println("AWS IoT Timeout!");
+    return;
+  }
+
+  client.subscribe(AWS_IOT_SUBSCRIBE_TOPIC);
+  Serial.println("AWS IoT Connected!");
+}
+
+// Function to publish message to AWS IoT Core
+void publishMessage() {
+  float h = dht.readHumidity();
+  float t = dht.readTemperature();
+  int vibration = digitalRead(VIBRATION_SENSOR_PIN); // Read vibration sensor value
+
+  if (isnan(h) || isnan(t)) {
+    Serial.println("Failed to read from DHT sensor!");
+    return;
+  }
+
+  Serial.print("Humidity: ");
+  Serial.print(h);
+  Serial.print("%  Temperature: ");
+  Serial.print(t);
+  Serial.print("°C  Vibration: ");
+  Serial.println(vibration);
+
+  StaticJsonDocument<200> doc;
+  doc["time"] = millis();
+  doc["humidity"] = h;
+  doc["temperature"] = t;
+  doc["vibration"] = vibration;
+
+  char jsonBuffer[200];
+  serializeJson(doc, jsonBuffer);
+
+  client.publish(AWS_IOT_PUBLISH_TOPIC, jsonBuffer);
+}
+
+void setup() {
+  Serial.begin(115200);
+  dht.begin();
+  pinMode(VIBRATION_SENSOR_PIN, INPUT); // Set vibration sensor pin as input
+  connectAWS();
+}
+
+void loop() {
+  if (millis() - lastMillis > interval) {
+    lastMillis = millis();
+    if (client.connected()) {
+      publishMessage();
+    }
+  }
+  client.loop();
+}
